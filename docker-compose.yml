@@ -1,54 +1,53 @@
-version: "3"
+version: '3'
+
 services:
-  vcache_mgmt:
-    image: node-red
+  vcache_mgr_agent:
+    image: vcache-node-red
     build:
-      context: ./docker-context/node-red
-    container_name: vcache_mgmt
+      context: ./context
+      dockerfile: ./node-red/Dockerfile
+    container_name: vcache_mgr_agent
     hostname: ${VCACHE_HOSTNAME}
     volumes:
-      - "./mgmt-data:/data"
-      - "./run:/var/run"
+      - ./context/node-red/mgmt-data:/data # comment out for production
+      - var_run:/var/run
+      - var_log_fe:/var/log-fe
+      - var_log_be:/var/log-be
+      - etc_salt:/etc/salt
+      - etc_vcache:/etc/vcache
+      - etc_frontend:/etc/nginx-fe
+      - etc_varnish:/etc/varnish
+      - etc_backend:/etc/nginx-be
     networks:
       - vcache_net
-    # close this for production
+    environment:
+      - VCACHE_VERSION=${VCACHE_VERSION}
+      - VCACHE_HOSTNAME=${VCACHE_HOSTNAME}
+      - SALT_MASTER=${VCACHE_MGR_ADDR}
     ports:
-      - "1880:1880"
+      - 1881:1880 # comment out for production
     pid: shareable
     restart: always
     depends_on:
       - vcache_redis
 
-  # mgmt-agent:
-  #   image: "saltstack/salt"
-  #   volumes:
-  #     - "./run:/var/run"
-  #     - "./log/salt:/var/log/salt"
-  #     - "./etc/salt:/etc/salt"
-  
   vcache_frontend:
-    image: nginx-perl
+    image: vcache-nginx-perl-frontend
     build:
-      context: ./docker-context/nginx
+      context: ./context
+      dockerfile: ./nginx/Dockerfile.frontend
     container_name: vcache_frontend
     hostname: ${VCACHE_HOSTNAME}
     volumes:
-      - "./run:/var/run"
-      - "./log/nginx:/var/log/nginx"
-      - "./etc/nginx/nginx-fe.conf:/etc/nginx/nginx.conf:ro"
-      - "./etc/nginx/.htpasswd:/etc/nginx/.htpasswd"
-      - "./etc/nginx/pki:/etc/nginx/pki:ro"
-      - "./etc/nginx/sites-enabled/frontend.cfg:/etc/nginx/sites-enabled/frontend.cfg"
-      - "./etc/nginx/sites-enabled/host-cache.incl:/etc/nginx/sites-enabled/host-cache.incl"
-      - "./etc/nginx/modules-enabled/80-mod-http-perl.conf:/etc/nginx/modules-enabled/80-mod-http-perl.conf"
-      - "./etc/nginx/modules-enabled/50-mod-http-subs-filter.conf:/etc/nginx/modules-enabled/50-mod-http-subs-filter.conf"
-      - "./perllib:/var/lib/nginx/perllib"
+      - var_run:/var/run
+      - var_log_fe:/var/log/nginx
+      - etc_frontend:/etc/nginx
     networks:
       - vcache_net
     ports:
-      - "443:443"
-      - "8443:8443"
-    pid: "service:vcache_mgmt"
+      - 443:443
+      - 8443:8443
+    pid: service:vcache_mgr_agent
     ulimits:
        memlock: -1
        nofile:
@@ -57,20 +56,20 @@ services:
     restart: always
     depends_on:
       - vcache_engine
-      - vcache_mgmt
-
+      - vcache_mgr_agent
+      
   vcache_engine:
-    image: varnish
+    image: vcache-varnish
     build:
-      context: ./docker-context/varnish
+      context: ./context/varnish
     container_name: vcache_engine
     volumes:
-      - "./etc/varnish:/etc/varnish"
-      - "./run:/var/run"
-      - "varnish_tmpfs:/var/lib/varnish"
+      - var_run:/var/run
+      - etc_varnish:/etc/varnish
+      - varnish_tmpfs:/var/lib/varnish
     networks:
       - vcache_net
-    pid: "service:vcache_mgmt"
+    pid: service:vcache_mgr_agent
     ulimits:
        memlock: -1
        nofile:
@@ -85,34 +84,32 @@ services:
       - vcache_backend
 
   vcache_backend:
-    image: nginx-perl
+    image: vcache-nginx-perl-backend
     build:
-      context: ./docker-context/nginx
+      context: ./context
+      dockerfile: ./nginx/Dockerfile.backend
     container_name: vcache_backend
     hostname: ${VCACHE_HOSTNAME}
     volumes:
-      - "./run:/var/run"
-      - "./log/nginx:/var/log/nginx"
-      - "./etc/nginx/nginx-be.conf:/etc/nginx/nginx.conf:ro"
-      - "./etc/nginx/sites-enabled/backend.cfg:/etc/nginx/sites-enabled/backend.cfg"
-      - "./etc/nginx/modules-enabled/80-mod-http-perl.conf:/etc/nginx/modules-enabled/80-mod-http-perl.conf"
-      - "./perllib:/var/lib/nginx/perllib"
+      - var_run:/var/run
+      - var_log_be:/var/log/nginx
+      - etc_backend:/etc/nginx
     networks:
       - vcache_net
-    pid: "service:vcache_mgmt"
+    pid: service:vcache_mgr_agent
     restart: always
 
   vcache_stats:
-    image: varnish
+    image: vcache-varnish-stats
     build:
-      context: ./docker-context/varnish
+      context: ./context/varnish
     container_name: vcache_stats
     volumes:
-      - ./etc/varnishstats:/etc/varnish
+      - var_run:/var/run
       - varnish_tmpfs:/var/lib/varnish:ro
     environment:
       VSM_NOPID: 1
-    command: "start-varnishstats-exporter"
+    command: start-varnishstats-exporter
     networks:
       - vcache_net
     restart: always
@@ -124,18 +121,35 @@ services:
     image: redis:latest
     container_name: vcache_redis
     volumes:
-      - "redis_data:/data"
+      - redis_data:/data
     networks:
       - vcache_net
     # close this for production
     ports:
-      - "6379:6379"
+      - 6380:6379
     restart: always
 
 volumes:
+  etc_vcache:
+    name: vcache_etc_vcache
+  etc_salt:
+    name: vcache_etc_salt
+  etc_frontend:
+    name: vcache_etc_frontend
+  var_log_fe:
+    name: vcache_var_log_fe
+  etc_backend:
+    name: vcache_backend_etc
+  var_log_be:
+    name: vcache_var_log_be
+  var_run:
+    name: vcache_var_run
   redis_data:
     name: vcache_redis_data
+  etc_varnish:
+    name: vcache_etc_varnish
   varnish_tmpfs:
+    name: vcache_varnish_tmpfs
     driver_opts:
       type: tmpfs
       device: tmpfs
